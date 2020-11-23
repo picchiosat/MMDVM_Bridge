@@ -2,7 +2,7 @@
 
 #################################################################
 # /*
-#  * Copyright (C) 2019 N4IRR
+#  * Copyright (C) 2019, 2020 N4IRR
 #  *
 #  * Permission to use, copy, modify, and/or distribute this software for any
 #  * purpose with or without fee is hereby granted, provided that the above
@@ -22,7 +22,7 @@
 #set -xv   # this line will enable debug
 
 
-SCRIPT_VERSION="dvswitch.sh 1.5.9"
+SCRIPT_VERSION="1.6.0"
 
 AB_DIR=${AB_DIR:-"/var/lib/dvswitch"}
 MMDVM_DIR=${MMDVM_DIR:-"/var/lib/mmdvm"}
@@ -96,11 +96,13 @@ python3 - <<END
 #!/usr/bin/env python
 try:
     import sys, configparser
-    config = configparser.ConfigParser(inline_comment_prefixes=(';',))
-    config.read("$1")
+    with open("$1") as f:
+        file_content = '[dummy_section]\n' + f.read()
+    config = configparser.RawConfigParser(inline_comment_prefixes=(';',))
+    config.read_string(file_content)
     print( config.get('$2', '$3') )
 except:
-    sys.stderr.write("parseIniFile: Config parse error for file: $1\n")
+    sys.stderr.write("parseIniFile: Config parse error for file: $1.  Error: " + str(sys.exc_info()[1]) + "\n")
     print("ERROR")
     exit(1)
 END
@@ -833,6 +835,8 @@ function setMode() {
                 ${DEBUG} setAmbeMode $_MODE
                 ${DEBUG} setTLVTxPort ${_MBRX}
                 ${DEBUG} setTLVRxPort ${_MBTX}
+                if [ $# -ge 2 ]; then ${DEBUG} setTLVGain $2; setTLVAudioType AUDIO_USE_GAIN; fi
+                if [ $# -ge 3 ]; then ${DEBUG} setUSRPGain $3; setUSRPAudioType AUDIO_USE_GAIN; fi
                 ${DEBUG} getInfo
             else
                 echo "Error, DVSwitch.ini file not found"
@@ -880,7 +884,7 @@ function lookup() {
 #################################################################
 function appVersion() {
     if [ $# -eq 0 ]; then
-        echo $SCRIPT_VERSION
+        echo "dvswitch.sh version $SCRIPT_VERSION"
     else
         case $1 in
             ab|AB|Analog_Bridge)
@@ -1012,7 +1016,7 @@ function updateINIFileValue() {
     if [ $# -ge 2 ]; then       # Do we have the correct number of arguments?
         if [ -f ${_file} ]; then    # Check if the file exists (better error message then parseIniFile)
             declare _secFound=$(grep -i "^\\[${_section}\\]" "${_file}")
-            if [ ! -z ${_secFound} ]; then  # See if the section exists
+            if [ ! -z "${_secFound}" ]; then  # See if the section exists
                 if [ ! -z ${_tag} ]; then
                     declare _tagLine=$(sed  -n "/^\[${_section}\]/,/^\[/ p" "${_file}" | sed -n "/${_tag}/p")
                     if [ ! -z "${_tagLine}" ]; then
@@ -1021,7 +1025,7 @@ function updateINIFileValue() {
                             declare _oldLine="^${_tag}.*=.*${_oldValue}"
                             declare _equal=`[[ "${_tagLine}" == *" = "* ]] && echo " = " || echo "="`
                             declare _newLine="${_tag}${_equal}${_value}"
-                            sed -i -e "/^\[${_section}\]/,/^\[/ s/${_oldLine}/${_newLine}/" "${_file}"
+                            sed -i -e "/^\[${_section}\]/,/^\[/ s/${_oldLine}/${_newLine}/i" "${_file}"
                         else
                             echo "${_tagLine}"
                         fi
@@ -1067,6 +1071,30 @@ END
     remoteControlCommand "gps=${latlon[0]},${latlon[1]}"
 }
 
+function parseAnyIniFile() {
+    if [ $# -ge 2 ]; then
+        case $1 in
+            AB|ab)
+                parseIniFile "/opt/Analog_Bridge/Analog_Bridge.ini" $2 $3
+            ;;
+            MB|mb)
+                parseIniFile "${MMDVM_INI}" $3 $3
+            ;;
+            DV|dv)
+                parseIniFile "${DVSWITCH_INI}" $2 $3
+            ;;
+            *)
+                if [ -f "$1" ]; then
+                    parseIniFile "$1" "$2" $3
+                else
+                    echo "INI file $1 was not found"
+                fi
+            ;;
+        esac
+    else
+        echo "Wrong number of arguments: [path | AB | MB | DV] [section] [tag]"
+    fi
+}
 #################################################################
 # Show usage string to someone who wants to know the available options
 #################################################################
@@ -1148,7 +1176,10 @@ else
             fi
         ;;
         updateINIFileValue|updateinifilevalue|uifv)
-            updateINIFileValue "$2" $3 $4 $5 ${@:6}
+            updateINIFileValue "$2" "$3" $4 $5 ${@:6}
+        ;;
+        parseIniFile|parseinifile|pif)
+            parseAnyIniFile "$2" "$3" $4
         ;;
         *)
             # All the commands below require that a valid ABInfo file exists.  
@@ -1159,7 +1190,7 @@ else
             fi
             case $1 in
                 mode)
-                    setMode $2
+                    setMode $2 $3 $4
                 ;;
                 tune)
                     ${DEBUG} tune $2
